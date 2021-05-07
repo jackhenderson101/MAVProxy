@@ -1,3 +1,4 @@
+import sys
 from MAVProxy.modules.lib.wx_loader import wx
 
 class TabbedDialog(wx.Dialog):
@@ -28,11 +29,11 @@ class TabbedDialog(wx.Dialog):
         button_box.Add(self.button_apply, 0, wx.ALL)
         button_box.Add(self.button_save, 0, wx.ALL)
         button_box.Add(self.button_load, 0, wx.ALL)
-        self.dialog_sizer.Add(button_box, 0, wx.GROW|wx.ALIGN_CENTER_VERTICAL|wx.ALL, 5)
-        wx.EVT_BUTTON(self, self.button_cancel.GetId(), self.on_cancel)
-        wx.EVT_BUTTON(self, self.button_apply.GetId(), self.on_apply)
-        wx.EVT_BUTTON(self, self.button_save.GetId(), self.on_save)
-        wx.EVT_BUTTON(self, self.button_load.GetId(), self.on_load)
+        self.dialog_sizer.Add(button_box, 0, wx.GROW|wx.ALL, 5)
+        self.Bind(wx.EVT_BUTTON, self.on_cancel, self.button_cancel)
+        self.Bind(wx.EVT_BUTTON, self.on_apply, self.button_apply)
+        self.Bind(wx.EVT_BUTTON, self.on_save, self.button_save)
+        self.Bind(wx.EVT_BUTTON, self.on_load, self.button_load)
         self.Centre()
 
     def on_cancel(self, event):
@@ -70,7 +71,12 @@ class TabbedDialog(wx.Dialog):
             setting = self.setting_map[label]
             ctrl = self.controls[label]
             value = ctrl.GetValue()
-            if isinstance(value, str) or isinstance(value, unicode):
+
+            # Python 2 compatiblility - alternative is:
+            # import six
+            # isinstance(value, six.string_types)
+            if isinstance(value, str) \
+                or isinstance(value, str if sys.version_info[0] >= 3 else unicode):
                 ctrl.SetValue(str(setting.value))
             else:
                 ctrl.SetValue(setting.value)
@@ -97,7 +103,7 @@ class TabbedDialog(wx.Dialog):
         box.Add( ctrl, 1, wx.ALIGN_CENTRE|wx.ALL, 5 )
         if ctrl2 is not None:
             box.Add( ctrl2, 0, wx.ALIGN_CENTRE|wx.ALL, 5 )
-        self.sizer(tab_name).Add(box, 0, wx.GROW|wx.ALIGN_CENTER_VERTICAL|wx.ALL, 5)
+        self.sizer(tab_name).Add(box, 0, wx.GROW|wx.ALL, 5)
         self.controls[label] = ctrl
         if value is not None:
             ctrl.Value = value

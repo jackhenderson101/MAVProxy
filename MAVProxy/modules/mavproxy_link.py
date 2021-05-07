@@ -14,6 +14,7 @@ from MAVProxy.modules.lib import mp_util
 
 if mp_util.has_wxpython:
     from MAVProxy.modules.lib.mp_menu import *
+    from MAVProxy.modules.lib.wx_addlink import MPMenulinkAddDialog
 
 dataPackets = frozenset(['BAD_DATA','LOG_DATA'])
 delayedPackets = frozenset([ 'MISSION_CURRENT', 'SYS_STATUS', 'VFR_HUD',
@@ -54,10 +55,9 @@ class LinkModule(mp_module.MPModule):
 
         self.menu_added_console = False
         if mp_util.has_wxpython:
-            self.menu_add = MPMenuSubMenu('Add', items=[])
             self.menu_rm = MPMenuSubMenu('Remove', items=[])
             self.menu = MPMenuSubMenu('Link',
-                                      items=[self.menu_add,
+                                      items=[MPMenuItem('Add...', 'Add...', '# link add ', handler=MPMenulinkAddDialog()),
                                              self.menu_rm,
                                              MPMenuItem('Ports', 'Ports', '# link ports'),
                                              MPMenuItem('List', 'List', '# link list'),
@@ -69,7 +69,6 @@ class LinkModule(mp_module.MPModule):
         if mp_util.has_wxpython and (not self.menu_added_console and self.module('console') is not None):
             self.menu_added_console = True
             # we don't dynamically update these yet due to a wx bug
-            self.menu_add.items = [ MPMenuItem(p, p, '# link add %s' % p) for p in self.complete_serial_ports('') ]
             self.menu_rm.items = [ MPMenuItem(p, p, '# link remove %s' % p) for p in self.complete_links('') ]
             self.module('console').add_menu(self.menu)
         for m in self.mpstate.mav_master:
@@ -133,7 +132,8 @@ class LinkModule(mp_module.MPModule):
     def show_link(self):
         '''show link information'''
         for master in self.mpstate.mav_master:
-            linkdelay = (self.status.highest_msec.get(self.target_system,0) - master.highest_msec.get(self.target_system,0))*1.0e-3
+            highest_msec_key = (self.target_system, self.target_component)
+            linkdelay = (self.status.highest_msec.get(highest_msec_key, 0) - master.highest_msec.get(highest_msec_key, 0))*1.0e-3
             if master.linkerror:
                 status = "DOWN"
             else:
@@ -208,6 +208,16 @@ class LinkModule(mp_module.MPModule):
         '''add new link'''
         try:
             (device, optional_attributes) = self.parse_link_descriptor(descriptor)
+            # if there's only 1 colon for port:baud
+            # and if the first string is a valid serial port, it's a serial connection
+            if len(device.split(':')) == 2:
+                ports = mavutil.auto_detect_serial(preferred_list=preferred_ports)
+                for p in ports:
+                    if p.device == device.split(':')[0]:
+                        # it's a valid serial port, reformat arguments to fit
+                        self.settings.baudrate = int(device.split(':')[1])
+                        device = device.split(':')[0]
+                        break
             print("Connect %s source_system=%d" % (device, self.settings.source_system))
             try:
                 conn = mavutil.mavlink_connection(device, autoreconnect=True,
@@ -339,20 +349,23 @@ class LinkModule(mp_module.MPModule):
 
         msec = m.time_boot_ms
         sysid = m.get_srcSystem()
-        if msec + 30000 < master.highest_msec.get(sysid,0):
+        compid = m.get_srcComponent()
+        highest_msec_key = (sysid,compid)
+        highest = master.highest_msec.get(highest_msec_key, 0)
+        if msec + 30000 < highest:
             self.say('Time has wrapped')
-            print('Time has wrapped', msec, master.highest_msec.get(sysid,0))
-            self.status.highest_msec[sysid] = msec
+            print('Time has wrapped', msec, highest)
+            self.status.highest_msec[highest_msec_key] = msec
             for mm in self.mpstate.mav_master:
                 mm.link_delayed = False
-                mm.highest_msec[sysid] = msec
+                mm.highest_msec[highest_msec_key] = msec
             return
 
         # we want to detect when a link is delayed
-        master.highest_msec[sysid] = msec
-        if msec > self.status.highest_msec.get(sysid,0):
-            self.status.highest_msec[sysid] = msec
-        if msec < self.status.highest_msec.get(sysid,0) and len(self.mpstate.mav_master) > 1 and self.mpstate.settings.checkdelay:
+        master.highest_msec[highest_msec_key] = msec
+        if msec > self.status.highest_msec.get(highest_msec_key, 0):
+            self.status.highest_msec[highest_msec_key] = msec
+        if msec < self.status.highest_msec.get(highest_msec_key, 0) and len(self.mpstate.mav_master) > 1 and self.mpstate.settings.checkdelay:
             master.link_delayed = True
         else:
             master.link_delayed = False
@@ -400,7 +413,7 @@ class LinkModule(mp_module.MPModule):
         if out != self.status.last_apm_msg or time.time() > self.status.last_apm_msg_time+2:
             (fg, bg) = self.colors_for_severity(pending.severity)
             out = pending.accumulated_statustext()
-            self.mpstate.console.writeln("APM: %s" % out, bg=bg, fg=fg)
+            self.mpstate.console.writeln("AP: %s" % out, bg=bg, fg=fg)
             self.status.last_apm_msg = out
             self.status.last_apm_msg_time = time.time()
         del self.status.statustexts_by_sysidcompid[key][id]

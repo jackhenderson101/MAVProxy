@@ -5,6 +5,7 @@
 import gzip
 import math
 import os
+import io
 import sys
 import platform
 import warnings
@@ -272,7 +273,8 @@ def download_files(files):
             continue
         if url.endswith(".gz") and not file.endswith(".gz"):
             # decompress it...
-            data = gzip.decompress(data)
+            with gzip.GzipFile(fileobj=io.BytesIO(data)) as gz:
+                data = gz.read()
         try:
             open(file, mode='wb').write(data)
         except Exception as e:
@@ -345,7 +347,8 @@ def decode_devid(devid, pname):
         2: "SPI",
         3: "UAVCAN",
         4: "SITL",
-        5: "MSP"
+        5: "MSP",
+        6: "EAHRS"
         }
 
     compass_types = {
@@ -364,8 +367,8 @@ def decode_devid(devid, pname):
         0x0E : "DEVTYPE_MAG3110",
         0x0F : "DEVTYPE_SITL",
         0x10 : "DEVTYPE_IST8308",
-        0x11 : "DEVTYPE_RM3100_OLD",
-        0x12 : "DEVTYPE_RM3100",
+        0x11 : "DEVTYPE_RM3100",
+        0x12 : "DEVTYPE_RM3100_2",
         }
 
     imu_types = {
@@ -376,6 +379,7 @@ def decode_devid(devid, pname):
         0x13 : "DEVTYPE_ACC_MPU6000",
         0x16 : "DEVTYPE_ACC_MPU9250",
         0x17 : "DEVTYPE_ACC_IIS328DQ",
+        0x18 : "DEVTYPE_ACC_LSM9DS1",
         0x21 : "DEVTYPE_GYR_MPU6000",
         0x22 : "DEVTYPE_GYR_L3GD20",
         0x24 : "DEVTYPE_GYR_MPU9250",
@@ -392,6 +396,9 @@ def decode_devid(devid, pname):
         0x2F : "DEVTYPE_INS_ICM20602",
         0x30 : "DEVTYPE_INS_ICM20601",
         0x31 : "DEVTYPE_INS_ADIS1647x",
+        0x32 : "DEVTYPE_INS_SERIAL",
+        0x33 : "DEVTYPE_INS_ICM40609",
+        0x34 : "DEVTYPE_INS_ICM42688",
         }
 
     baro_types = {
@@ -415,6 +422,8 @@ def decode_devid(devid, pname):
     if pname.startswith("COMPASS"):
         if bus_type == 3 and devtype == 1:
             decoded_devname = "UAVCAN"
+        elif bus_type == 6 and devtype == 1:
+            decoded_devname = "EAHRS"
         else:
             decoded_devname = compass_types.get(devtype, "UNKNOWN")
 
@@ -422,6 +431,9 @@ def decode_devid(devid, pname):
         decoded_devname = imu_types.get(devtype, "UNKNOWN")
 
     if pname.startswith("GND_BARO"):
+        decoded_devname = baro_types.get(devtype, "UNKNOWN")
+
+    if pname.startswith("BARO"):
         decoded_devname = baro_types.get(devtype, "UNKNOWN")
         
     print("%s: bus_type:%s(%u)  bus:%u address:%u(0x%x) devtype:%u(0x%x) %s (%u)" % (

@@ -14,8 +14,9 @@ from MAVProxy.modules.mavproxy_map import mp_slipmap, mp_tile
 from MAVProxy.modules.lib import mp_util
 from MAVProxy.modules.lib import multiproc
 from MAVProxy.modules.lib import grapher
+from MAVProxy.modules.lib import kmlread
 import functools
-
+import random
 import cv2
 
 def create_map(title):
@@ -26,7 +27,7 @@ def pixel_coords(latlon, ground_width=0, mt=None, topleft=None, width=None):
     (lat,lon) = (latlon[0], latlon[1])
     return mt.coord_to_pixel(topleft[0], topleft[1], width, ground_width, lat, lon)
 
-def create_imagefile(options, filename, latlon, ground_width, path_objs, mission_obj, fence_obj, width=600, height=600, used_flightmodes=[], mav_type=None):
+def create_imagefile(options, filename, latlon, ground_width, path_objs, mission_obj, fence_obj, kml_objects, width=600, height=600, used_flightmodes=[], mav_type=None):
     '''create path and mission as an image file'''
     mt = mp_tile.MPTile(service=options.service)
 
@@ -46,6 +47,15 @@ def create_imagefile(options, filename, latlon, ground_width, path_objs, mission
             m.draw(map_img, pixmapper, None)
     if fence_obj is not None:
         fence_obj.draw(map_img, pixmapper, None)
+
+    if kml_objects is not None:
+        for obj in kml_objects:
+            print(obj)
+            try:
+                obj.draw(map_img, pixmapper, None)
+            except Exception:
+                pass
+
     if (options is not None and
         mav_type is not None and
         options.colour_source == "flightmode"):
@@ -250,7 +260,7 @@ def mavflightview_mav(mlog, options=None, flightmode_selections=[]):
     instances = {}
     ekf_counter = 0
     nkf_counter = 0
-    types = ['MISSION_ITEM','CMD']
+    types = ['MISSION_ITEM', 'MISSION_ITEM_INT', 'CMD']
     if options.types is not None:
         types.extend(options.types.split(','))
     else:
@@ -266,18 +276,27 @@ def mavflightview_mav(mlog, options=None, flightmode_selections=[]):
         if options.ahr2:
             types.extend(['AHR2', 'AHRS2', 'GPS'])
 
+    # handle forms like GPS[0], mapping to GPS for recv_match_types
+    for i in range(len(types)):
+        bracket = types[i].find('[')
+        if bracket != -1:
+            types[i] = types[i][:bracket]
+
     recv_match_types = types[:]
     colour_source = getattr(options, "colour_source")
+    re_caps = re.compile('[A-Z_][A-Z0-9_]+')
+
     if colour_source is not None:
         # stolen from mavgraph.py
-        re_caps = re.compile('[A-Z_][A-Z0-9_]+')
         caps = set(re.findall(re_caps, colour_source))
         recv_match_types.extend(caps)
 
-    print("Looking for types %s" % str(types))
+    print("Looking for types %s" % str(recv_match_types))
 
     last_timestamps = {}
     used_flightmodes = {}
+
+    mlog.rewind()
 
     while True:
         try:
@@ -289,16 +308,36 @@ def mavflightview_mav(mlog, options=None, flightmode_selections=[]):
 
         type = m.get_type()
 
-        if type == 'MISSION_ITEM':
+        if type in ['MISSION_ITEM', 'MISSION_ITEM_INT']:
             try:
-                while m.seq > wp.count():
+                new_m = m
+                if type == 'MISSION_ITEM_INT':
+                    # create a MISSION_ITEM from MISSION_ITEM_INT
+                    new_m = mavutil.mavlink.MAVLink_mission_item_message(
+                        0,
+                        0,
+                        m.seq,
+                        m.frame,
+                        m.command,
+                        m.current,
+                        m.autocontinue,
+                        m.param1,
+                        m.param2,
+                        m.param3,
+                        m.param4,
+                        m.x / 1.0e7,
+                        m.y / 1.0e7,
+                        m.z
+                    )
+                while new_m.seq > wp.count():
                     print("Adding dummy WP %u" % wp.count())
-                    wp.set(m, wp.count())
-                wp.set(m, m.seq)
-            except Exception:
+                    wp.set(new_m, wp.count())
+                wp.set(new_m, m.seq)
+            except Exception as e:
+                print("Exception: %s" % str(e))
                 pass
             continue
-        if type == 'CMD':
+        elif type == 'CMD':
             if options.mission is None:
                 m = mavutil.mavlink.MAVLink_mission_item_message(0,
                                                                 0,
@@ -429,7 +468,17 @@ def mavflightview_show(path, wp, fen, used_flightmodes, mav_type, options, insta
     if not title:
         title='MAVFlightView'
 
-    bounds = mp_util.polygon_bounds(path[0])
+
+    boundary_path = []
+    for p in path[0]:
+        boundary_path.append((p[0],p[1]))
+
+    fence = fen.polygon()
+    if options.fencebounds:
+        for p in fence:
+            boundary_path.append((p[0],p[1]))
+
+    bounds = mp_util.polygon_bounds(boundary_path)
     (lat, lon) = (bounds[0]+bounds[2], bounds[1])
     (lat, lon) = mp_util.gps_newpos(lat, lon, -45, 50)
     ground_width = mp_util.gps_distance(lat, lon, lat-bounds[2], lon+bounds[3])
@@ -452,15 +501,20 @@ def mavflightview_show(path, wp, fen, used_flightmodes, mav_type, options, insta
     else:
         mission_obj = None
 
-    fence = fen.polygon()
     if len(fence) > 1:
         fence_obj = mp_slipmap.SlipPolygon('Fence-%s' % title, fen.polygon(), layer='Fence',
                                            linewidth=2, colour=(0,255,0))
     else:
         fence_obj = None
 
+    kml = getattr(options,'kml',None)
+    if kml is not None:
+        kml_objects = load_kml(kml)
+    else:
+        kml_objects = None
+
     if options.imagefile:
-        create_imagefile(options, options.imagefile, (lat,lon), ground_width, path_objs, mission_obj, fence_obj, used_flightmodes=used_flightmodes, mav_type=mav_type)
+        create_imagefile(options, options.imagefile, (lat,lon), ground_width, path_objs, mission_obj, fence_obj, kml_objects, used_flightmodes=used_flightmodes, mav_type=mav_type)
     else:
         global multi_map
         if options.multi and multi_map is not None:
@@ -485,6 +539,10 @@ def mavflightview_show(path, wp, fen, used_flightmodes, mav_type, options, insta
         if fence_obj is not None:
             map.add_object(fence_obj)
 
+        if kml_objects is not None:
+            for obj in kml_objects:
+                map.add_object(obj)
+            
         for flag in options.flag:
             a = flag.split(',')
             lat = a[0]
@@ -505,6 +563,33 @@ def mavflightview_show(path, wp, fen, used_flightmodes, mav_type, options, insta
         else:
             print("colour-source: min=%f max=%f" % (colour_source_min, colour_source_max))
 
+
+def load_kml(kml):
+    '''load a kml overlay, return list of map objects'''
+    print("Loading kml %s" % kml)
+    nodes = kmlread.readkmz(kml)
+    ret = []
+    for n in nodes:
+        try:
+            point = kmlread.readObject(n)
+        except Exception as ex:
+            continue
+
+        if point[0] == 'Polygon':
+            newcolour = (random.randint(0, 255), 0, random.randint(0, 255))
+            curpoly = mp_slipmap.SlipPolygon(point[1], point[2],
+                                             layer=2, linewidth=2, colour=newcolour)
+            ret.append(curpoly)
+
+        if point[0] == 'Point':
+            icon = mp_tile.mp_icon('barrell.png')
+            curpoint = mp_slipmap.SlipIcon(point[1], latlon = (point[2][0][0], point[2][0][1]), layer=3, img=icon, rotation=0, follow=False)
+            curtext = mp_slipmap.SlipLabel(point[1], point = (point[2][0][0], point[2][0][1]), layer=4, label=point[1], colour=(0,255,255))
+            ret.append(curpoint)
+            ret.append(curtext)
+    return ret
+
+
 def mavflightview(filename, options):
     print("Loading %s ..." % filename)
     mlog = mavutil.mavlink_connection(filename)
@@ -521,6 +606,7 @@ class mavflightview_options(object):
         self.condition = None
         self.mission = None
         self.fence = None
+        self.fencebounds = False
         self.imagefile = None
         self.flag = []
         self.rawgps = False
@@ -547,6 +633,7 @@ if __name__ == "__main__":
     parser.add_option("--condition", default=None, help="conditional check on log")
     parser.add_option("--mission", default=None, help="mission file (defaults to logged mission)")
     parser.add_option("--fence", default=None, help="fence file")
+    parser.add_option("--fencebounds", action='store_true', help="use fence boundary for zoom")
     parser.add_option("--imagefile", default=None, help="output to image file")
     parser.add_option("--flag", default=[], type='str', action='append', help="flag positions")
     parser.add_option("--rawgps", action='store_true', default=False, help="use GPS_RAW_INT")
@@ -563,6 +650,7 @@ if __name__ == "__main__":
     parser.add_option("--rate", type='int', default=0, help="maximum message rate to display (0 means all points)")
     parser.add_option("--colour-source", type="str", default="flightmode", help="expression with range 0f..255f used for point colour")
     parser.add_option("--no-flightmode-legend", action="store_false", default=True, dest="show_flightmode_legend", help="hide legend for colour used for flight modes")
+    parser.add_option("--kml", default=None, help="add kml overlay")
 
     (opts, args) = parser.parse_args()
 
@@ -572,6 +660,8 @@ if __name__ == "__main__":
 
     if opts.multi:
         multi_map = None
+
+    random.seed(1)
 
     for f in args:
         mavflightview(f, opts)

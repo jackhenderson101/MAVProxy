@@ -71,6 +71,7 @@ class ConsoleModule(mp_module.MPModule):
         mpstate.console.set_status('FlightTime', 'FlightTime --', row=3)
         mpstate.console.set_status('ETR', 'ETR --', row=3)
         mpstate.console.set_status('Params', 'Param ---/---', row=3)
+        mpstate.console.set_status('Mission', 'Mission --/--', row=3)
 
         mpstate.console.ElevationMap = mp_elevation.ElevationModel()
 
@@ -256,13 +257,13 @@ class ConsoleModule(mp_module.MPModule):
             return
         type = msg.get_type()
         sysid = msg.get_srcSystem()
+        compid = msg.get_srcComponent()
 
         if type == 'HEARTBEAT':
             if not sysid in self.vehicle_list:
                 self.add_new_vehicle(msg)
             if sysid not in self.component_name:
                 self.component_name[sysid] = {}
-            compid = msg.get_srcComponent()
             if compid not in self.component_name[sysid]:
                 self.component_name[sysid][compid] = self.component_type_string(msg)
                 self.update_vehicle_menu()
@@ -382,13 +383,17 @@ class ConsoleModule(mp_module.MPModule):
                         'TERR' : mavutil.mavlink.MAV_SYS_STATUS_TERRAIN,
                         'RNG'  : mavutil.mavlink.MAV_SYS_STATUS_SENSOR_LASER_POSITION,
                         'LOG'  : mavutil.mavlink.MAV_SYS_STATUS_LOGGING,
+                        'PRX'  : mavutil.mavlink.MAV_SYS_STATUS_SENSOR_PROXIMITY,
+                        'PRE'  : mavutil.mavlink.MAV_SYS_STATUS_PREARM_CHECK,
             }
-            announce = [ 'RC' ]
+            hide_if_not_present = set(['PRE', 'PRX'])
             for s in sensors.keys():
                 bits = sensors[s]
                 present = ((msg.onboard_control_sensors_present & bits) == bits)
                 enabled = ((msg.onboard_control_sensors_enabled & bits) == bits)
                 healthy = ((msg.onboard_control_sensors_health & bits) == bits)
+                if not present and s in hide_if_not_present:
+                    continue
                 if not present:
                     fg = 'black'
                 elif not enabled:
@@ -401,13 +406,27 @@ class ConsoleModule(mp_module.MPModule):
                 if s == 'TERR' and fg == 'green' and master.field('TERRAIN_REPORT', 'pending', 0) != 0:
                     fg = 'yellow'
                 self.console.set_status(s, s, fg=fg)
-            for s in announce:
+            announce_unhealthy = {
+                'RC': 'RC',
+                'PRE': 'pre-arm',
+            }
+            for s in announce_unhealthy.keys():
                 bits = sensors[s]
                 enabled = ((msg.onboard_control_sensors_enabled & bits) == bits)
                 healthy = ((msg.onboard_control_sensors_health & bits) == bits)
                 was_healthy = ((self.last_sys_status_health & bits) == bits)
                 if enabled and not healthy and was_healthy:
-                    self.say("%s fail" % s)
+                    self.say("%s fail" % announce_unhealthy[s])
+            announce_healthy = {
+                'PRE': 'pre-arm',
+            }
+            for s in announce_healthy.keys():
+                bits = sensors[s]
+                enabled = ((msg.onboard_control_sensors_enabled & bits) == bits)
+                healthy = ((msg.onboard_control_sensors_health & bits) == bits)
+                was_healthy = ((self.last_sys_status_health & bits) == bits)
+                if enabled and healthy and not was_healthy:
+                    self.say("%s good" % announce_healthy[s])
             self.last_sys_status_health = msg.onboard_control_sensors_health
 
             if ((msg.onboard_control_sensors_enabled & mavutil.mavlink.MAV_SYS_STATUS_SENSOR_MOTOR_OUTPUTS) == 0):
@@ -482,7 +501,8 @@ class ConsoleModule(mp_module.MPModule):
                 self.max_link_num = len(self.mpstate.mav_master)
             for m in self.mpstate.mav_master:
                 if self.mpstate.settings.checkdelay:
-                    linkdelay = (self.mpstate.status.highest_msec.get(sysid, 0) - m.highest_msec.get(sysid,0))*1.0e-3
+                    highest_msec_key = (sysid, compid)
+                    linkdelay = (self.mpstate.status.highest_msec.get(highest_msec_key, 0) - m.highest_msec.get(highest_msec_key,0))*1.0e-3
                 else:
                     linkdelay = 0
                 linkline = "Link %s " % (self.link_label(m))

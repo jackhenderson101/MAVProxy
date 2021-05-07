@@ -9,7 +9,7 @@ Released under the GNU GPL version 3 or later
 
 import sys, os, time, socket, signal
 import fnmatch, errno, threading
-import serial, select
+import serial
 import traceback
 import select
 import shlex
@@ -472,6 +472,15 @@ def generate_kwargs(args):
                                                            repr(e)))
     return (module_name, kwargs)
 
+def get_exception_stacktrace(e):
+    if sys.version_info[0] >= 3:
+        ret = "%s\n" % e
+        ret += ''.join(traceback.format_exception(etype=type(e),
+                                                  value=e,
+                                                  tb=e.__traceback__))
+        return ret
+    return traceback.format_exc(e)
+
 def load_module(modname, quiet=False, **kwargs):
     '''load a module'''
     modpaths = ['MAVProxy.modules.mavproxy_%s' % modname, modname]
@@ -501,8 +510,7 @@ def load_module(modname, quiet=False, **kwargs):
         except ImportError as msg:
             ex = msg
             if mpstate.settings.moddebug > 1:
-                import traceback
-                print(traceback.format_exc())
+                print(get_exception_stacktrace(ex))
     help_traceback = ""
     if mpstate.settings.moddebug < 3:
         help_traceback = " Use 'set moddebug 3' in the MAVProxy console to enable traceback"
@@ -997,9 +1005,7 @@ def periodic_tasks():
                 if mpstate.settings.moddebug == 1:
                     print(msg)
                 elif mpstate.settings.moddebug > 1:
-                    exc_type, exc_value, exc_traceback = sys.exc_info()
-                    traceback.print_exception(exc_type, exc_value, exc_traceback,
-                                              limit=2, file=sys.stdout)
+                    print(get_exception_stacktrace(msg))
 
         # also see if the module should be unloaded:
         if m.needs_unloading:
@@ -1216,6 +1222,8 @@ if __name__ == '__main__':
     parser.add_option("--aircraft", dest="aircraft", help="aircraft name", default=None)
     parser.add_option("--cmd", dest="cmd", help="initial commands", default=None, action='append')
     parser.add_option("--console", action='store_true', help="use GUI console")
+    if platform.system() == 'Windows':
+        parser.add_option("--no-console", action='store_true', help="don't use GUI console")
     parser.add_option("--map", action='store_true', help="load map module")
     parser.add_option(
         '--load-module',
@@ -1340,8 +1348,10 @@ if __name__ == '__main__':
           print("Connecting to %s" % serial_list[0])
           mpstate.module('link').link_add(serial_list[0].device)
     elif not opts.master and len(serial_list) > 1:
-          print("Error: multiple possible serial ports; use --master to select a single port")
-          sys.exit(1)
+          print("Warning: multiple possible serial ports. Use console GUI or 'link add' to add port, or restart using --master to select a single port")
+          #if no display, assume running CLI mode and exit
+          if platform.system() != 'Windows' and "DISPLAY" not in os.environ:
+              sys.exit(1)
     elif not opts.master:
           wifi_device = '0.0.0.0:14550'
           mpstate.module('link').link_add(wifi_device)
@@ -1384,8 +1394,13 @@ if __name__ == '__main__':
         for m in standard_modules:
             load_module(m, quiet=True)
 
-    if opts.console:
-        process_stdin('module load console')
+    if platform.system() != 'Windows':
+        if opts.console:
+            process_stdin('module load console')
+    else:
+        # default to having console on windows
+        if opts.console or not opts.no_console:
+            process_stdin('module load console')
 
     if opts.map:
         process_stdin('module load map')
